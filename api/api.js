@@ -5,6 +5,9 @@ var User = require('./models/User.js');
 var jwt = require('jwt-simple');
 var passport = require('passport');
 var LocalStrategy = require('passport-local');
+var moment = require('moment');
+var request = require('request');
+var facebookAuth = require('./services/facebookAuth');
 
 var app = express();
 
@@ -15,9 +18,10 @@ passport.serializeUser(function(user, done){
 });
 
 app.use(function(req, res, next){
-  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Origin', 'http://localhost:9000');
   res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
   next();
 });
 
@@ -85,9 +89,12 @@ app.post('/login', passport.authenticate('local-login'), function(req, res){
     createSendToken(req.user, res);
 });
 
+app.post('/auth/facebook', facebookAuth);
+
 function createSendToken(user, res){
     var payload = {
-      sub: user.id
+      sub: user.id,
+      exp: moment().add(10, 'days').unix()
     }
     var token = jwt.encode(payload, 'shhh...');
 
@@ -122,7 +129,46 @@ app.get('/jobs', function(req, res){
     res.json(jobs);
 });
 
+app.post('/auth/google', function(req, res){
 
+    var url = 'https://accounts.google.com/o/oauth2/token';
+    var apiUrl = 'https://www.googleapis.com/plus/v1/people/me/openIdConnect';
+    var params = {
+        client_id: req.body.clientId,
+        redirect_uri: req.body.redirectUri,
+        code: req.body.code,
+        grant_type: 'authorization_code',
+        client_secret: 'G3Vfypt_Z-5SyzY_Qnj9Rlq6'
+    }
+
+    request.post(url, {
+        json: true,
+        form: params
+    }, function(err, response, token){
+        var accessToken = token.access_token;
+        var headers = {
+            Authorization: 'Bearer ' + accessToken
+        }
+
+        request.get({
+            url: apiUrl,
+            headers: headers,
+            json: true
+        }, function(err, response, profile){
+            User.findOne({googleId: profile.sub}, function(err, foundUser){
+                if (foundUser) return createSendToken(foundUser, res);
+
+                var newUser = new User();
+                newUser.googleID = profile.sub;
+                newUser.displayName = profile.name;
+                newUser.save(function(err){
+                    if(err) return next(err);
+                    createSendToken(newUser, res);
+                });
+            });
+        });
+    });
+});
 mongoose.connect('mongodb://localhost/token_demo');
 
 var server = app.listen(3000, function(){
